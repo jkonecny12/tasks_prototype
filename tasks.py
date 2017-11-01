@@ -48,6 +48,14 @@ class BaseTask(object):
         """
         return 0
 
+    def is_cancelable(self) -> bool:
+        """Could this task be canceled?"""
+        return False
+
+    def cancel(self):
+        """Cancel this task in progress."""
+        pass
+
     def error_raised(self, error: str):
         """Signal error to DBus."""
         pass
@@ -95,9 +103,9 @@ class BaseTask(object):
             error = str(e)
             result = False
 
-        self._shared.store_result = result
-        self._shared.store_error = error
-        self._shared.store_task_running = False
+        self._shared.store_result(result)
+        self._shared.store_error(error)
+        self._shared.store_task_running(False)
 
     def _progress_callback(self, data):
         self.progress_changed(*data)
@@ -116,6 +124,8 @@ class BaseTask(object):
         self._shared.add_variable("error", self._error_callback)
         self._shared.add_variable("task_running", self._task_running_callback)
         self._shared.add_variable("progress", self._progress_callback)
+        self._shared.add_variable("cancel")
+        self._shared.store_cancel(True)
 
     def run_task(self) -> (bool, str):
         """Override this method to run this tasks work.
