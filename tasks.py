@@ -2,8 +2,9 @@
 # Simple tasks object prototype.
 #
 
-from threading import Thread
-from shared_vars import SharedVars
+from threading import Thread, Lock
+from shared_signal import SharedSignal
+from iutils import synchronized
 
 
 class BaseTask(object):
@@ -13,8 +14,20 @@ class BaseTask(object):
         self._loop = loop
         self._name = name
         self._description = description
+        self._thread = None
+        self._lock = Lock()
 
-        self._shared = None
+        self._progress = (0, "")
+        self._error = ""
+        self._task_running = False
+
+        self._progress_signal = SharedSignal()
+        self._error_signal = SharedSignal()
+        self._task_running_signal = SharedSignal()
+
+        self._progress_signal.connect(self._progress_callback)
+        self._error_signal.connect(self._error_callback)
+        self._task_running_signal.connect(self._task_running_callback)
 
     @property
     def name(self) -> str:
@@ -26,9 +39,15 @@ class BaseTask(object):
         """Get short description of this task."""
         return ""
 
+    @synchronized
     def is_running(self) -> bool:
         """Is this task running right now?"""
-        return self._shared.get_task_running()
+        return self._task_running
+
+    @synchronized
+    def _set_is_running(self, task_running):
+        """Set is running thread safe."""
+        self._task_running = task_running
 
     def is_running_changed(self, running: bool):
         """Property task_running have changed."""
@@ -49,11 +68,11 @@ class BaseTask(object):
 
     def is_cancelable(self) -> bool:
         """Could this task be canceled?"""
-        return False
+        return True
 
     def cancel(self):
         """Cancel this task in progress."""
-        pass
+        self._set_is_running(False)
 
     def error_raised(self, error: str):
         """Signal error to DBus."""
@@ -65,7 +84,7 @@ class BaseTask(object):
         :returns: Actual progress step and message with short description what is happening in this step.
         :rtype: (int, str)
         """
-        return self._shared.get_progress()
+        return self._progress
 
     def progress_changed(self, step: int, message: str):
         """Signal change of the progress."""
@@ -76,10 +95,9 @@ class BaseTask(object):
 
         :returns: Tuple (success, error_message).
         """
-        self._shared = SharedVars(self._name + " SharedVars")
-        self.prepare()
-        thread = Thread(target=self._run, daemon=True, args=[self._shared])
-        thread.run()
+        self._thread = Thread(target=self._run, daemon=True)
+        self._set_is_running(True)
+        self._thread.run()
 
     def _run(self):
         """This method will everything required for mark running process and similar.
@@ -90,47 +108,35 @@ class BaseTask(object):
 
         :returns: Tuple (success, error_message).
         """
-        if self._shared.task_running:
-            return False, ("Error, task %s is already running!" % self._name)
-
-        self._shared.task_running = True
+        self._task_running = True
 
         try:
-            result, error = self.run_task()
+            self.run_task()
         except Exception as e:
             # If anything goes wrong return False and exception string
-            error = str(e)
-            result = False
+            self._error_signal.emit(str(e))
 
-        self._shared.store_result(result)
-        self._shared.store_error(error)
-        self._shared.store_task_running(False)
+        self._task_running_signal.emit(False)
 
     def _progress_callback(self, data):
-        self.progress_changed(*data)
+        self._progress = data
+        self.progress_changed(data[0], data[1])
 
     def _task_running_callback(self, data):
+        self._task_running = data
         self.is_running_changed(data)
 
     def _error_callback(self, data):
+        self._set_is_running(False)
+        self._error = data
         self.error_raised(data)
 
-    def prepare(self):
-        """Prepare before the thread with task will run.
-
-        This could be overridden to set self._shared value. This original implementation must be called!
-        """
-        self._shared.add_variable("error", self._error_callback)
-        self._shared.add_variable("task_running", self._task_running_callback)
-        self._shared.add_variable("progress", self._progress_callback)
-        self._shared.add_variable("cancel")
-        self._shared.store_cancel(True)
-
-    def run_task(self) -> (bool, str):
+    def run_task(self) -> str:
         """Override this method to run this tasks work.
 
         This will run in a separate thread??
-
-        :returns: Tuple (success, error_message).
         """
+        # do sub tasks
+        # emit signals when step progress or error raised
+        # test if task_running don't want to cancel this task
         raise NotImplementedError
