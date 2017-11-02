@@ -26,7 +26,6 @@ class BaseTask(object):
         """Get short description of this task."""
         return ""
 
-    @property
     def is_running(self) -> bool:
         """Is this task running right now?"""
         return self._shared.get_task_running()
